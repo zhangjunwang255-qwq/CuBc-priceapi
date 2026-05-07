@@ -42,8 +42,6 @@ TQ_SERVER   = os.getenv("TQ_SERVER",   "tcp://121.37.80.136:7701")
 if TQ_ACCOUNT and TQ_PASSWORD:
     logger.info("使用天勤账号登录: %s", TQ_ACCOUNT)
     TQAPI_KWARGS = {
-        "user_lang":       "zh_CN",
-        "auth":            None,            # TqAuth 对象由线程内构造
         "_td_url":         TQ_SERVER,
         "md_reconnect":    True,
         "front_debug":     False,
