@@ -21,7 +21,11 @@ from typing import Optional
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import os
+
 from pydantic import BaseModel
 
 logger = logging.getLogger("cubc-api")
@@ -254,6 +258,22 @@ async def get_dashboard():
         },
         "update_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+
+app.mount("/static", StaticFiles(directory=Path(__file__).parent.parent / "frontend"), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    index_path = Path(__file__).parent.parent / "frontend" / "index.html"
+    if index_path.exists():
+        return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>CuBc API Running</h1><p>Frontend not found</p>")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    return await root()
 
 
 @app.get("/health")
