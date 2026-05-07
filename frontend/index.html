@@ -346,7 +346,7 @@
   let lastFetch = 0;        // 上次 fetch 时间戳
   let fetchCount = 0;       // 累计请求计数
 
-  const API_BASE = "http://localhost:8000";
+  const API_BASE = window.location.origin;
 
   // ── 工具函数 ──────────────────────────────────────────────────────────────
   function fmt(v, decimals = 1) {
