@@ -1,10 +1,20 @@
 """
 CuBc-priceapi 实时行情后端
 依赖 FastAPI + TqSdk 异步推送行情
+
+Railway 部署时需在 Dashboard → Variables 设置以下环境变量：
+  TQ_ACCOUNT   天勤账号
+  TQ_PASSWORD  天勤密码
+  TQ_SERVER    行情服务器地址（默认 tcp://121.37.80.136:7701）
+  PORT         Railway 自动注入，无需手动配置
+
+启动命令：
+  uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, date
 from typing import Optional
@@ -13,113 +23,122 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import tqsdk
 
-# ─── 日志 ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-)
 logger = logging.getLogger("cubc-api")
 
 
-# ─── 全局行情缓存 ────────────────────────────────────────────────────────────
-# 结构: { symbol_code: { "last_price": float, "bid_price1": float, ... } }
+# ─── 全局行情缓存（纯内存，无磁盘写入）───────────────────────────────────────
 quote_cache: dict = {}
 
-# 全局 TqApi 实例（运行在独立线程，由 _api_loop 驱动）
-_api: Optional[tqsdk.TqApi] = None
-_loop: Optional[asyncio.AbstractEventLoop] = None
+# ─── TqSdk 连接参数（从环境变量读取）────────────────────────────────────────
+TQ_ACCOUNT  = os.getenv("TQ_ACCOUNT",  "")
+TQ_PASSWORD = os.getenv("TQ_PASSWORD", "")
+TQ_SERVER   = os.getenv("TQ_SERVER",   "tcp://121.37.80.136:7701")
 
-# ─── 合约代码动态生成 ────────────────────────────────────────────────────────
-def _build_symbols() -> dict:
-    """
-    根据运行日期动态生成 M+1 / M+2 合约代码。
-    沪铜: SHFE.cu{YY}{MM:02d}
-    国际铜: INE.bc{YY}{MM:02d}
-    跨年时年份自动滚动。
-    """
-    today = date.today()
-    year = today.year          # 2026
-    month = today.month        # 5
-    yy   = year % 100          # 26
-
-    # M+1、M+2（跨年+12 进位）
-    m1 = month + 1
-    y1 = yy
-    if m1 > 12:
-        m1 -= 12
-        y1 = (year + 1) % 100
-
-    m2 = month + 2
-    y2 = yy
-    if m2 > 12:
-        m2 -= 12
-        y2 = (year + 1) % 100
-
-    cu_m1  = f"SHFE.cu{y1}{m1:02d}"
-    cu_m2  = f"SHFE.cu{y2}{m2:02d}"
-    bc_m1  = f"INE.bc{y1}{m1:02d}"
-    bc_m2  = f"INE.bc{y2}{m2:02d}"
-
-    logger.info(
-        "生成的合约列表 | M+1 月=%d M+2 月=%d | "
-        "CU: %s %s | BC: %s %s",
-        m1, m2, cu_m1, cu_m2, bc_m1, bc_m2,
-    )
-    return {
-        "cu":  {"m_plus_1": cu_m1,  "m_plus_2": cu_m2},
-        "bc":  {"m_plus_1": bc_m1,  "m_plus_2": bc_m2},
+if TQ_ACCOUNT and TQ_PASSWORD:
+    logger.info("使用天勤账号登录: %s", TQ_ACCOUNT)
+    TQAPI_KWARGS = {
+        "user_lang":       "zh_CN",
+        "auth":            None,            # TqAuth 对象由线程内构造
+        "_td_url":         TQ_SERVER,
+        "md_reconnect":    True,
+        "front_debug":     False,
+    }
+else:
+    logger.info("未配置 TQ_ACCOUNT/TQ_PASSWORD，采用匿名模式（仅免费行情）")
+    TQAPI_KWARGS = {
+        "_td_url":      TQ_SERVER,
+        "md_reconnect": True,
+        "front_debug":  False,
     }
 
 
-SYMBOLS = _build_symbols()
+# ─── 动态合约代码生成 ────────────────────────────────────────────────────────
+def _build_symbols() -> dict:
+    """
+    根据运行日期动态生成 M+1 / M+2 合约代码。
+    沪铜:  SHFE.cu{YY}{MM:02d}
+    国际铜: INE.bc{YY}{MM:02d}
+    跨年时月份 +12 进位，年份同步滚动。
+    """
+    today  = date.today()
+    year   = today.year
+    month  = today.month
+    yy     = year % 100
+
+    def roll(yy_, mm_):
+        if mm_ > 12:
+            return (yy_ + 1) % 100, mm_ - 12
+        return yy_, mm_
+
+    yy1, mm1 = roll(yy, month + 1)
+    yy2, mm2 = roll(yy, month + 2)
+
+    cu_m1 = f"SHFE.cu{yy1}{mm1:02d}"
+    cu_m2 = f"SHFE.cu{yy2}{mm2:02d}"
+    bc_m1 = f"INE.bc{yy1}{mm1:02d}"
+    bc_m2 = f"INE.bc{yy2}{mm2:02d}"
+
+    logger.info(
+        "动态合约 | 当前月=%d → M+1=%d M+2=%d | "
+        "CU: %s %s | BC: %s %s",
+        month, mm1, mm2, cu_m1, cu_m2, bc_m1, bc_m2,
+    )
+    return {
+        "cu": {"m_plus_1": cu_m1, "m_plus_2": cu_m2},
+        "bc": {"m_plus_1": bc_m1, "m_plus_2": bc_m2},
+    }
+
+
+SYMBOLS     = _build_symbols()
 SYMBOL_CODES = list(SYMBOLS["cu"].values()) + list(SYMBOLS["bc"].values())
 
 
-# ─── TqSdk 数据拉取循环（运行在专有线程）──────────────────────────────────────
+# ─── TqSdk 数据拉取线程 ──────────────────────────────────────────────────────
 def _api_loop():
     """
     在独立线程中运行 TqSdk 事件循环：
-    - 初始化 TqApi（连接到 tcp://121.37.80.136:7701）
-    - 订阅 SYMBOL_CODES 中所有合约
-    - 实时更新全局 quote_cache
+    - 连接 TQ_SERVER
+    - 订阅 SYMBOL_CODES 所有合约
+    - 实时更新全局 quote_cache（纯内存）
+    - md_reconnect=True，断线自动重连，不崩溃
     """
-    global _api, quote_cache
+    import tqsdk
 
     try:
-        logger.info("TqSdk 线程启动，连接行情服务器 …")
-        _api = tqsdk.TqApi(
-            # 行情服务器地址
-            _td_url="tcp://121.37.80.136:7701",
-            # 重连开关（断线自动重连，不崩溃）
-            md_reconnect=True,
-            # 仅接收行情数据，不需要交易
-            front_debug=False,
-        )
+        logger.info("TqSdk 线程启动，连接 %s …", TQ_SERVER)
 
-        # 注册所有合约订阅
-        quotes = _api.subscribe_quotes(SYMBOL_CODES)
+        if TQ_ACCOUNT and TQ_PASSWORD:
+            auth = tqsdk.TqAuth(TQ_ACCOUNT, TQ_PASSWORD)
+            api_kwargs = {
+                **TQAPI_KWARGS,
+                "auth": auth,
+            }
+        else:
+            api_kwargs = TQAPI_KWARGS.copy()
+
+        api = tqsdk.TqApi(**api_kwargs)
+        quotes = api.subscribe_quotes(SYMBOL_CODES)
         logger.info("已订阅合约: %s", SYMBOL_CODES)
 
         while True:
-            # wait_update 会阻塞直到行情有更新或超时（5 s 兜底心跳）
-            _api.wait_update(deadline=_api.timeout(5))
-            # 读取所有合约最新快照
+            # wait_update 阻塞直到行情更新或 5 s 心跳超时
+            api.wait_update(deadline=api.timeout(5))
+
             for sym in SYMBOL_CODES:
                 try:
                     q = quotes[sym]
                     quote_cache[sym] = {
-                        "symbol":        sym,
-                        "last_price":    q.get("last_price"),
-                        "bid_price1":   q.get("bid_price1"),
-                        "ask_price1":   q.get("ask_price1"),
-                        "bid_volume1":  q.get("bid_volume1"),
-                        "ask_volume1":  q.get("ask_volume1"),
-                        "volume":        q.get("volume"),
-                        "open_interest": q.get("open_interest"),
-                        "datetime":      q.get("datetime"),
-                        "update_time":   datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        "symbol":         sym,
+                        "last_price":     q.get("last_price"),
+                        "bid_price1":     q.get("bid_price1"),
+                        "ask_price1":     q.get("ask_price1"),
+                        "bid_volume1":    q.get("bid_volume1"),
+                        "ask_volume1":    q.get("ask_volume1"),
+                        "volume":         q.get("volume"),
+                        "open_interest":  q.get("open_interest"),
+                        "datetime":       q.get("datetime"),
+                        "update_time":    datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                     }
                 except Exception as e:
                     logger.warning("读取 %s 行情失败: %s", sym, e)
@@ -132,22 +151,18 @@ def _api_loop():
 # ─── FastAPI 生命周期 ────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动 TqSdk 线程
     import threading
     t = threading.Thread(target=_api_loop, daemon=True, name="tqsdk-loop")
     t.start()
-    logger.info("TqSdk 数据拉取线程已启动")
+    logger.info("TqSdk 数据拉取线程已启动（环境变量配置: TQ_ACCOUNT=%s)",
+                "已配置" if TQ_ACCOUNT else "未配置（匿名模式）")
     yield
-    # shutdown
-    global _api
-    if _api:
-        _api.close()
     logger.info("FastAPI 已关闭")
 
 
 app = FastAPI(
     title="CuBc 实时行情 API",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -162,16 +177,16 @@ app.add_middleware(
 
 # ─── Pydantic 模型 ───────────────────────────────────────────────────────────
 class QuoteSnapshot(BaseModel):
-    symbol:        str
-    last_price:    Optional[float]
-    bid_price1:    Optional[float]
-    ask_price1:    Optional[float]
-    bid_volume1:   Optional[float]
-    ask_volume1:   Optional[float]
-    volume:        Optional[float]
-    open_interest: Optional[float]
-    datetime:     Optional[str]
-    update_time:  str
+    symbol:         str
+    last_price:     Optional[float]
+    bid_price1:     Optional[float]
+    ask_price1:     Optional[float]
+    bid_volume1:    Optional[float]
+    ask_volume1:    Optional[float]
+    volume:         Optional[float]
+    open_interest:  Optional[float]
+    datetime:       Optional[str]
+    update_time:    str
 
 
 # ─── API 端点 ────────────────────────────────────────────────────────────────
@@ -179,15 +194,15 @@ class QuoteSnapshot(BaseModel):
 async def get_quote(symbol: str = Query(..., description="CU 或 BC")):
     """
     单合约快照（调试用）。
-    symbol=CU  → 返回沪铜 M+1
-    symbol=BC  → 返回国际铜 M+1
+    symbol=CU → 沪铜 M+1
+    symbol=BC → 国际铜 M+1
     """
     sym_map = {"CU": SYMBOLS["cu"]["m_plus_1"], "BC": SYMBOLS["bc"]["m_plus_1"]}
-    if symbol.upper() not in sym_map:
+    key = symbol.upper()
+    if key not in sym_map:
         raise HTTPException(400, f"未知 symbol: {symbol}，仅支持 CU / BC")
 
-    sym_code = sym_map[symbol.upper()]
-    data = quote_cache.get(sym_code)
+    data = quote_cache.get(sym_map[key])
     if not data:
         raise HTTPException(503, "行情尚未初始化，请稍后重试")
 
@@ -198,31 +213,25 @@ async def get_quote(symbol: str = Query(..., description="CU 或 BC")):
 async def get_dashboard():
     """
     仪表盘数据接口。
-    返回沪铜、国际铜 M+1/M+2 最新价格、跨月价差、以及 CU/BC 跨品种比值。
+    返回沪铜 / 国际铜 M+1 / M+2 最新价格、跨月价差、CU/BC 比值。
     所有数据取自内存缓存，无磁盘写入。
     """
-    cu_m1  = SYMBOLS["cu"]["m_plus_1"]
-    cu_m2  = SYMBOLS["cu"]["m_plus_2"]
-    bc_m1  = SYMBOLS["bc"]["m_plus_1"]
-    bc_m2  = SYMBOLS["bc"]["m_plus_2"]
-
     def p(sym: str) -> Optional[float]:
         d = quote_cache.get(sym)
         return d["last_price"] if d else None
 
+    cu_m1 = SYMBOLS["cu"]["m_plus_1"]
+    cu_m2 = SYMBOLS["cu"]["m_plus_2"]
+    bc_m1 = SYMBOLS["bc"]["m_plus_1"]
+    bc_m2 = SYMBOLS["bc"]["m_plus_2"]
+
     cu1 = p(cu_m1);  cu2 = p(cu_m2)
     bc1 = p(bc_m1);  bc2 = p(bc_m2)
 
-    # 跨月价差（沪铜 M+1 - M+2）
-    cu_spread  = round(cu1 - cu2, 2) if (cu1 is not None and cu2 is not None) else None
-    # 国际铜跨月价差
-    bc_spread  = round(bc1 - bc2, 2) if (bc1 is not None and bc2 is not None) else None
-
-    # 跨品种比值：CU / BC（取 M+1 与 M+2 两个比值的平均）
-    ratio_m1 = round(cu1 / bc1, 4) if (cu1 is not None and bc1 is not None) else None
-    ratio_m2 = round(cu2 / bc2, 4) if (cu2 is not None and bc2 is not None) else None
-
-    update_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    cu_spread = round(cu1 - cu2, 2) if (cu1 is not None and cu2 is not None) else None
+    bc_spread = round(bc1 - bc2, 2) if (bc1 is not None and bc2 is not None) else None
+    ratio_m1  = round(cu1 / bc1, 4) if (cu1 is not None and bc1 is not None) else None
+    ratio_m2  = round(cu2 / bc2, 4) if (cu2 is not None and bc2 is not None) else None
 
     return {
         "cu": {
@@ -243,21 +252,23 @@ async def get_dashboard():
             "m_plus_1_ratio": ratio_m1,
             "m_plus_2_ratio": ratio_m2,
         },
-        "update_time": update_time,
+        "update_time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
 @app.get("/health")
 async def health():
     return {
-        "status": "ok",
-        "symbols": SYMBOL_CODES,
+        "status":    "ok",
+        "symbols":  SYMBOL_CODES,
         "cache_size": len(quote_cache),
-        "server": "tcp://121.37.80.136:7701",
+        "tq_server":  TQ_SERVER,
+        "tq_auth":    "已配置" if TQ_ACCOUNT else "匿名模式",
     }
 
 
-# ─── 启动入口（直接 python main.py 可运行）───────────────────────────────────
+# ─── 直接运行入口（本地调试用）───────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
