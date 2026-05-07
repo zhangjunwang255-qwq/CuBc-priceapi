@@ -42,16 +42,12 @@ TQ_SERVER   = os.getenv("TQ_SERVER",   "tcp://121.37.80.136:7701")
 if TQ_ACCOUNT and TQ_PASSWORD:
     logger.info("使用天勤账号登录: %s", TQ_ACCOUNT)
     TQAPI_KWARGS = {
-        "_td_url":         TQ_SERVER,
-        "md_reconnect":    True,
-        "front_debug":     False,
+        "_td_url": TQ_SERVER,
     }
 else:
     logger.info("未配置 TQ_ACCOUNT/TQ_PASSWORD，采用匿名模式（仅免费行情）")
     TQAPI_KWARGS = {
-        "_td_url":      TQ_SERVER,
-        "md_reconnect": True,
-        "front_debug":  False,
+        "_td_url": TQ_SERVER,
     }
 
 
