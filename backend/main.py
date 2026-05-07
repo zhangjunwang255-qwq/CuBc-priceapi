@@ -116,26 +116,27 @@ def _api_loop():
             api_kwargs = TQAPI_KWARGS.copy()
 
         api = tqsdk.TqApi(**api_kwargs)
-        quotes = api.subscribe_quote(SYMBOL_CODES)
+        # TqSdk 3.x: 对每个合约单独调用 get_quote()
+        quotes = {sym: api.get_quote(sym) for sym in SYMBOL_CODES}
         logger.info("已订阅合约: %s", SYMBOL_CODES)
 
         while True:
-            # wait_update 阻塞直到行情更新或 5 s 心跳超时
-            api.wait_update(deadline=api.timeout(5))
+            # wait_update() 阻塞直到行情更新
+            api.wait_update()
 
             for sym in SYMBOL_CODES:
                 try:
                     q = quotes[sym]
                     quote_cache[sym] = {
                         "symbol":         sym,
-                        "last_price":     q.get("last_price"),
-                        "bid_price1":     q.get("bid_price1"),
-                        "ask_price1":     q.get("ask_price1"),
-                        "bid_volume1":    q.get("bid_volume1"),
-                        "ask_volume1":    q.get("ask_volume1"),
-                        "volume":         q.get("volume"),
-                        "open_interest":  q.get("open_interest"),
-                        "datetime":       q.get("datetime"),
+                        "last_price":     q.last_price,
+                        "bid_price1":     q.bid_price1,
+                        "ask_price1":     q.ask_price1,
+                        "bid_volume1":    q.bid_volume1,
+                        "ask_volume1":    q.ask_volume1,
+                        "volume":         q.volume,
+                        "open_interest":  q.open_interest,
+                        "datetime":       q.datetime,
                         "update_time":    datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                     }
                 except Exception as e:
