@@ -116,7 +116,7 @@ def _api_loop():
             api_kwargs = TQAPI_KWARGS.copy()
 
         api = tqsdk.TqApi(**api_kwargs)
-        quotes = api.subscribe_quotes(SYMBOL_CODES)
+        quotes = api.subscribe_quote(SYMBOL_CODES)
         logger.info("已订阅合约: %s", SYMBOL_CODES)
 
         while True:
