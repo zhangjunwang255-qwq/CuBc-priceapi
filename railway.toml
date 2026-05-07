@@ -1,5 +1,2 @@
-[build]
-builder = "nixpacks"
-
 [deploy]
 watchPatterns = ["backend/**/*.py"]
