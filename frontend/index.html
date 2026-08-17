@@ -335,7 +335,7 @@
 </main>
 
 <div class="status-bar">
-  <span>行情服务器: tcp://121.37.80.136:7701</span>
+  <span>数据源: TqSdk 实时行情</span>
   <span>缓存合约数: <span id="cache-count">0</span></span>
   <span>API: <span id="api-status">—</span></span>
 </div>
@@ -389,13 +389,30 @@
     el.textContent = fmt(val, decimals);
   }
 
+  function renderQuoteRows(tableId, quotes) {
+    const tbody = document.querySelector(`#${tableId} tbody`);
+    tbody.innerHTML = (quotes || [])
+      .filter(Boolean)
+      .map(q => `
+        <tr>
+          <td>${q.symbol || "—"}</td>
+          <td>${fmt(q.bid_price1)}</td>
+          <td>${fmt(q.ask_price1)}</td>
+          <td>${fmtOI(q.open_interest)}</td>
+          <td>${fmtOI(q.volume)}</td>
+        </tr>
+      `)
+      .join("");
+  }
+
   // ── 渲染仪表盘 ─────────────────────────────────────────────────────────────
   function render(data) {
     if (!data) return;
 
     // 更新头部时间
+    const updateTime = data.update_time || "";
     document.getElementById("update-time").textContent =
-      (data.update_time || "").split("T")[1] || "—";
+      updateTime.split(/[T ]/).pop() || "—";
 
     // ── 沪铜 ──
     const cu = data.cu;
@@ -405,6 +422,7 @@
       setPrice("cu-m1-price", cu.price_m1);
       setPrice("cu-m2-price", cu.price_m2);
       setMetric("cu-spread", cu.spread);
+      renderQuoteRows("cu-table", [cu.quote_m1, cu.quote_m2]);
     }
 
     // ── 国际铜 ──
@@ -415,6 +433,7 @@
       setPrice("bc-m1-price", bc.price_m1);
       setPrice("bc-m2-price", bc.price_m2);
       setMetric("bc-spread", bc.spread);
+      renderQuoteRows("bc-table", [bc.quote_m1, bc.quote_m2]);
     }
 
     // ── 套利比值 ──
@@ -423,50 +442,6 @@
       setMetric("arb-m1", arb.m_plus_1_ratio, 4);
       setMetric("arb-m2", arb.m_plus_2_ratio, 4);
     }
-  }
-
-  // ── 渲染持仓/成交明细（通过 /quote 逐个获取）───────────────────────────────
-  function renderDetail(symbol, tableId) {
-    const symMap = { "cu-m1": "CU", "cu-m2": "CU", "bc-m1": "BC", "bc-m2": "BC" };
-    const symKey  = symbol.toUpperCase() === "CU" ? "CU" : "BC";
-    fetch(`${API_BASE}/quote?symbol=${symKey}`)
-      .then(r => r.json())
-      .then(q => {
-        // 找到对应的行合约
-        const tbody = document.querySelector(`#${tableId} tbody`);
-        const rows = tbody.querySelectorAll("tr");
-        let target = null;
-        const contractDisplay = document.getElementById(`${symbol.toLowerCase().replace("cu","cu").replace("bc","bc")}-m1-sym`).textContent;
-        rows.forEach(row => {
-          if (row.cells[0].textContent === contractDisplay) target = row;
-        });
-
-        const price = q.last_price;
-        const bid   = q.bid_price1;
-        const ask   = q.ask_price1;
-        const oi    = q.open_interest;
-        const vol   = q.volume;
-
-        // 只更新已有行或追加一行
-        if (!target) {
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${q.symbol}</td>
-            <td>${fmt(bid)}</td>
-            <td>${fmt(ask)}</td>
-            <td>${fmtOI(oi)}</td>
-            <td>${fmtOI(vol)}</td>
-          `;
-          tbody.appendChild(tr);
-        } else {
-          target.cells[0].textContent = q.symbol;
-          target.cells[1].textContent = fmt(bid);
-          target.cells[2].textContent = fmt(ask);
-          target.cells[3].textContent = fmtOI(oi);
-          target.cells[4].textContent = fmtOI(vol);
-        }
-      })
-      .catch(() => {});
   }
 
   // ── 轮询数据 ───────────────────────────────────────────────────────────────
@@ -481,7 +456,7 @@
       const data = await resp.json();
       lastFetch = Date.now();
       render(data);
-      statusEl.textContent = `正常 #${fetchCount}`;
+      statusEl.textContent = `${data.status || "未知"} #${fetchCount}`;
       document.getElementById("cache-count").textContent = data.cache_size || "?";
     } catch (err) {
       statusEl.textContent = "离线 / " + err.message;
