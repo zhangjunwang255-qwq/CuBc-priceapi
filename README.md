@@ -27,6 +27,8 @@ API 中的 `last_price` 是**最新成交价**，不是交易所结算价。
 - `live` / `stale` / `no_quote` / `expired` 状态；
 - 断线指数退避重连；
 - HTTP 轮询和 WebSocket 推送；
+- 最近 20 个交易日的两张独立一小时比值折线图，休市时段不占横轴；
+- 已结束小时使用 CU 与 BC 同时刻 K 线收盘价之比，当前小时随行情更新并标注为未收盘；
 - 无数据库依赖的纯内存缓存。
 
 ## 环境变量
@@ -66,6 +68,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/dashboard` | CU/BC M+1、M+2 行情、价差和比值 |
+| `GET` | `/api/ratio-history` | 最近 20 个交易日的 M+1 和 M+2 一小时比值序列 |
 | `GET` | `/quote` | 四个合约的全部快照 |
 | `GET` | `/quote?symbol=CU` | 沪铜 M+1，兼容旧调用 |
 | `GET` | `/quote?symbol=CU_M2` | 沪铜 M+2 |
@@ -98,13 +101,15 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 }
 ```
 
+`/api/dashboard` 的 `ratio_history_revision` 在历史图表数据变化时递增。页面只在初次打开或修订号变化时拉取 `/api/ratio-history`。该接口返回 `period_seconds: 3600`、`timezone: "Asia/Shanghai"`、`trading_days: 20`、`contracts`、`status`、`message`、`series_messages`、`revision`，以及两组独立的 `m_plus_1` 和 `m_plus_2` 点。每个点包含北京时间 `time`、`ratio` 和表示当前小时尚未结束的 `partial`。仅保留 CU 与 BC 同时刻、均有成交且收盘价有效的小时，因此休市时间不会产生点；历史行情不可用时返回空数组和说明。`series_messages` 分别提示两张图的数据是否覆盖足够的交易日。
+
 ## 测试
 
 ```bash
 python -m unittest discover -v
 ```
 
-测试覆盖指定日期合约、跨年、无效行情、行情新鲜度和换月清理。
+测试覆盖指定日期合约、跨年、无效行情、行情新鲜度、换月清理及小时比值历史。
 
 ## Railway
 

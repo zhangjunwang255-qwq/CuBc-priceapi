@@ -15,10 +15,12 @@ from fastapi.staticfiles import StaticFiles
 
 try:
     from .config import PORT, TQ_USER
+    from .ratio_store import RatioHistoryStore
     from .store import QuoteStore
     from .tqsdk_worker import AppState, TqSdkWorker
 except ImportError:  # pragma: no cover - direct ``uvicorn main:app`` execution
     from config import PORT, TQ_USER
+    from ratio_store import RatioHistoryStore
     from store import QuoteStore
     from tqsdk_worker import AppState, TqSdkWorker
 
@@ -30,8 +32,9 @@ logging.basicConfig(
 log = logging.getLogger("cubc-api")
 
 store = QuoteStore()
+ratio_store = RatioHistoryStore()
 app_state = AppState()
-worker = TqSdkWorker(store, app_state)
+worker = TqSdkWorker(store, app_state, ratio_store=ratio_store)
 
 
 @asynccontextmanager
@@ -137,6 +140,7 @@ def _dashboard_payload() -> dict:
         },
         "cache_size": len(quotes),
         "update_time": max(received_times, default=""),
+        "ratio_history_revision": ratio_store.snapshot()["revision"],
     }
 
 
@@ -155,6 +159,16 @@ async def dashboard():
 @app.get("/api/dashboard")
 def get_dashboard():
     return _dashboard_payload()
+
+
+@app.get("/api/ratio-history")
+def get_ratio_history():
+    return {
+        "period_seconds": 3600,
+        "timezone": "Asia/Shanghai",
+        "trading_days": 20,
+        **ratio_store.snapshot(),
+    }
 
 
 @app.get("/quote")
