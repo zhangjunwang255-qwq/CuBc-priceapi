@@ -101,7 +101,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 }
 ```
 
-`/api/dashboard` 的 `ratio_history_revision` 在历史图表数据变化时递增。页面只在初次打开或修订号变化时拉取 `/api/ratio-history`。该接口返回 `period_seconds: 3600`、`timezone: "Asia/Shanghai"`、`trading_days: 20`、`contracts`、`status`、`message`、`revision`，以及两组独立的 `m_plus_1` 和 `m_plus_2` 点。每个点包含北京时间 `time`、`ratio` 和表示当前小时尚未结束的 `partial`。仅保留 CU 与 BC 同时刻、均有成交且收盘价有效的小时，因此休市时间不会产生点；历史行情不可用时返回空数组和说明。
+`/api/dashboard` 的 `ratio_history_revision` 在历史图表数据变化时递增。页面只在初次打开或修订号变化时拉取 `/api/ratio-history`。该接口返回 `period_seconds: 3600`、`timezone: "Asia/Shanghai"`、`trading_days: 20`、`contracts`、`status`、`message`、`series_messages`、`revision`，以及两组独立的 `m_plus_1` 和 `m_plus_2` 点。每个点包含北京时间 `time`、`ratio` 和表示当前小时尚未结束的 `partial`。仅保留 CU 与 BC 同时刻、均有成交且收盘价有效的小时，因此休市时间不会产生点；历史行情不可用时返回空数组和说明。`series_messages` 分别提示两张图的数据是否覆盖足够的交易日。
 
 ## 测试
 

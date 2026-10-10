@@ -519,7 +519,8 @@
           ? (history.message || '一小时历史行情暂不可用')
           : `该 ${month} 合约暂无有效的一小时配对数据`;
       hover.textContent = '';
-      note.textContent = `最近 20 个交易日 · 休市时段已跳过${history.message && history.status === 'ready' ? ' · ' + history.message : ''}`;
+      const seriesMessage = history.series_messages?.[key] ?? history.message;
+      note.textContent = `最近 20 个交易日 · 休市时段已跳过${seriesMessage && history.status === 'ready' ? ' · ' + seriesMessage : ''}`;
       if (points.length) renderRatioChart(svg, points, {
         width: svg.parentElement.clientWidth,
         label: `${month} CU / BC 一小时比值`,

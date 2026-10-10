@@ -24,6 +24,7 @@ class RatioHistoryStore:
             "m_plus_2": [],
             "status": "loading",
             "message": "等待一小时行情数据",
+            "series_messages": {"m_plus_1": "", "m_plus_2": ""},
         }
         self._revision = 0
 
@@ -49,34 +50,44 @@ class RatioHistoryStore:
             bars.get(contracts["cu"]["m_plus_2"], ()),
             bars.get(contracts["bc"]["m_plus_2"], ()), calendar, now,
         )
-        points = all_m1 + all_m2
-        if points:
-            latest = max(datetime.fromisoformat(point["time"]) for point in points)
-            anchor = trading_day_for(latest, calendar)
-            selected = [day for day in calendar if anchor is not None and day <= anchor][-20:]
-            selected_set = set(selected)
-            m1 = [point for point in all_m1
-                  if trading_day_for(datetime.fromisoformat(point["time"]), calendar)
-                  in selected_set]
-            m2 = [point for point in all_m2
-                  if trading_day_for(datetime.fromisoformat(point["time"]), calendar)
-                  in selected_set]
+        local_now = now.replace(tzinfo=SHANGHAI_TZ) if now.tzinfo is None else now.astimezone(SHANGHAI_TZ)
+        current_days = [day for day in calendar if day <= local_now.date()]
+        anchor = current_days[-1] if current_days else None
+        for point in all_m1 + all_m2:
+            point_time = datetime.fromisoformat(point["time"])
+            if point_time <= local_now:
+                point_day = trading_day_for(point_time, calendar)
+                if point_day is not None and (anchor is None or point_day > anchor):
+                    anchor = point_day
+        selected = [day for day in calendar if anchor is not None and day <= anchor][-20:]
+        selected_set = set(selected)
+        m1 = [point for point in all_m1
+              if trading_day_for(datetime.fromisoformat(point["time"]), calendar)
+              in selected_set]
+        m2 = [point for point in all_m2
+              if trading_day_for(datetime.fromisoformat(point["time"]), calendar)
+              in selected_set]
+        status = "ready" if m1 or m2 else "unavailable"
+        series_messages = {}
+        for key, series in (("m_plus_1", m1), ("m_plus_2", m2)):
             observed = {
                 trading_day_for(datetime.fromisoformat(point["time"]), calendar)
-                for point in m1 + m2
+                for point in series
             }
-            message = "" if len(observed) >= 20 else "可用历史不足 20 个交易日"
-            status = "ready"
+            series_messages[key] = "" if len(observed) >= 20 else "可用历史不足 20 个交易日"
+        if status == "ready":
+            shortages = [label for key, label in (("m_plus_1", "M+1"), ("m_plus_2", "M+2"))
+                         if series_messages[key]]
+            message = f"{'、'.join(shortages)} 可用历史不足 20 个交易日" if shortages else ""
         else:
-            m1, m2 = [], []
-            message = "暂无有效的一小时交易数据"
-            status = "unavailable"
+            message = "最近 20 个交易日暂无有效的一小时交易数据"
         self._replace({
             "contracts": contracts,
             "m_plus_1": m1,
             "m_plus_2": m2,
             "status": status,
             "message": message,
+            "series_messages": series_messages,
         })
 
     def set_unavailable(self, message: str, contracts: dict | None = None) -> None:
@@ -88,6 +99,7 @@ class RatioHistoryStore:
                 "m_plus_2": [],
                 "status": "unavailable",
                 "message": message,
+                "series_messages": {"m_plus_1": "", "m_plus_2": ""},
             }
         self._replace(payload)
 

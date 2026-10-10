@@ -50,6 +50,8 @@ class RatioApiTests(unittest.TestCase):
         self.assertEqual(CONTRACTS, result["contracts"])
         self.assertEqual(1.125, result["m_plus_1"][0]["ratio"])
         self.assertEqual(1.25, result["m_plus_2"][0]["ratio"])
+        self.assertIn("m_plus_1", result["series_messages"])
+        self.assertIn("m_plus_2", result["series_messages"])
         self.assertEqual(cache.snapshot()["revision"], result["revision"])
 
     def test_unavailable_history_returns_empty_series_and_explanation(self):
