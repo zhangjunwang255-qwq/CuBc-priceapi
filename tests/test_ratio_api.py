@@ -1,5 +1,8 @@
 import unittest
+import subprocess
+import sys
 from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.config import SHANGHAI_TZ
@@ -20,6 +23,14 @@ def bar(close):
 
 
 class RatioApiTests(unittest.TestCase):
+    def test_documented_backend_entrypoint_imports(self):
+        backend_dir = Path(__file__).resolve().parents[1] / "backend"
+        result = subprocess.run(
+            [sys.executable, "-c", "import main"],
+            cwd=backend_dir, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_route_returns_two_separate_hourly_series_and_metadata(self):
         cache = RatioHistoryStore()
         cache.set_history(

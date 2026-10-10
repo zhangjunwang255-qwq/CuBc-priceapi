@@ -176,6 +176,30 @@
     .spread-value { color: var(--yellow); }
     .ratio-value  { color: var(--purple); }
 
+    /* ── 一小时比值图 ── */
+    .chart-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chart-head h2 { font-size: 17px; font-weight: 600; }
+    .chart-contracts, .chart-note, .chart-hover {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .chart-contracts { word-break: break-word; }
+    .chart-wrap { width: 100%; min-height: 284px; }
+    .chart-wrap svg { display: block; width: 100%; height: 284px; touch-action: pan-y; }
+    .chart-wrap svg[hidden], .chart-empty[hidden] { display: none; }
+    .chart-hover { min-height: 18px; color: var(--text); }
+    .chart-empty { color: var(--muted); padding: 112px 12px; text-align: center; }
+    .chart-note { min-height: 18px; }
+
     /* ── 持仓 / 成交量表格 ── */
     .detail-table {
       width: 100%;
@@ -332,6 +356,32 @@
     </div>
   </div>
 
+  <section class="card full" aria-labelledby="ratio-m1-title">
+    <div class="chart-head">
+      <h2 id="ratio-m1-title">CU M+1 / BC M+1 · 1 小时</h2>
+      <span class="chart-contracts" id="ratio-m1-contracts">合约读取中…</span>
+    </div>
+    <div class="chart-wrap" id="ratio-m1-wrap">
+      <div class="chart-empty" id="ratio-m1-empty">历史行情加载中…</div>
+      <svg id="ratio-m1-chart" hidden></svg>
+    </div>
+    <div class="chart-hover" id="ratio-m1-hover" aria-live="polite"></div>
+    <div class="chart-note" id="ratio-m1-note">最近 20 个交易日 · 休市时段已跳过</div>
+  </section>
+
+  <section class="card full" aria-labelledby="ratio-m2-title">
+    <div class="chart-head">
+      <h2 id="ratio-m2-title">CU M+2 / BC M+2 · 1 小时</h2>
+      <span class="chart-contracts" id="ratio-m2-contracts">合约读取中…</span>
+    </div>
+    <div class="chart-wrap" id="ratio-m2-wrap">
+      <div class="chart-empty" id="ratio-m2-empty">历史行情加载中…</div>
+      <svg id="ratio-m2-chart" hidden></svg>
+    </div>
+    <div class="chart-hover" id="ratio-m2-hover" aria-live="polite"></div>
+    <div class="chart-note" id="ratio-m2-note">最近 20 个交易日 · 休市时段已跳过</div>
+  </section>
+
 </main>
 
 <div class="status-bar">
@@ -340,13 +390,17 @@
   <span>API: <span id="api-status">—</span></span>
 </div>
 
-<script>
+<script type="module">
+  import { renderRatioChart } from '/static/ratio-chart.mjs';
   // ── 全局状态 ──────────────────────────────────────────────────────────────
   const PREV = {};          // 记录上一次价格，用于闪烁方向判断
   let lastFetch = 0;        // 上次 fetch 时间戳
   let fetchCount = 0;       // 累计请求计数
 
   const API_BASE = window.location.origin;
+  let historyRevision = null;
+  let historyRequest = null;
+  let lastHistory = null;
 
   // ── 工具函数 ──────────────────────────────────────────────────────────────
   function fmt(v, decimals = 1) {
@@ -444,6 +498,54 @@
     }
   }
 
+  function renderHistory(history) {
+    lastHistory = history;
+    for (const [suffix, key, month] of [['m1', 'm_plus_1', 'M+1'], ['m2', 'm_plus_2', 'M+2']]) {
+      const contracts = history.contracts || {};
+      const cu = contracts.cu?.[key] || '—';
+      const bc = contracts.bc?.[key] || '—';
+      document.getElementById(`ratio-${suffix}-contracts`).textContent = `${cu} / ${bc}`;
+      const svg = document.getElementById(`ratio-${suffix}-chart`);
+      const empty = document.getElementById(`ratio-${suffix}-empty`);
+      const hover = document.getElementById(`ratio-${suffix}-hover`);
+      const note = document.getElementById(`ratio-${suffix}-note`);
+      const points = history[key] || [];
+      if (points.length) svg.removeAttribute('hidden');
+      else svg.setAttribute('hidden', '');
+      empty.hidden = points.length > 0;
+      empty.textContent = history.status === 'loading'
+        ? '历史行情加载中…'
+        : history.status === 'unavailable'
+          ? (history.message || '一小时历史行情暂不可用')
+          : `该 ${month} 合约暂无有效的一小时配对数据`;
+      hover.textContent = '';
+      note.textContent = `最近 20 个交易日 · 休市时段已跳过${history.message && history.status === 'ready' ? ' · ' + history.message : ''}`;
+      if (points.length) renderRatioChart(svg, points, {
+        width: svg.parentElement.clientWidth,
+        label: `${month} CU / BC 一小时比值`,
+        color: suffix === 'm1' ? '#58a6ff' : '#bc8cff',
+        hoverEl: hover,
+      });
+    }
+  }
+
+  async function loadHistory(expectedRevision = null) {
+    if (historyRequest) await historyRequest;
+    if (expectedRevision !== null && expectedRevision === historyRevision) return;
+    historyRequest = (async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/api/ratio-history`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const history = await resp.json();
+        historyRevision = history.revision;
+        renderHistory(history);
+      } catch (err) {
+        renderHistory({ status: 'unavailable', message: `历史行情读取失败：${err.message}`, m_plus_1: [], m_plus_2: [] });
+      }
+    })().finally(() => { historyRequest = null; });
+    await historyRequest;
+  }
+
   // ── 轮询数据 ───────────────────────────────────────────────────────────────
   async function poll() {
     fetchCount++;
@@ -456,6 +558,9 @@
       const data = await resp.json();
       lastFetch = Date.now();
       render(data);
+      if (historyRevision !== data.ratio_history_revision) {
+        await loadHistory(data.ratio_history_revision);
+      }
       statusEl.textContent = `${data.status || "未知"} #${fetchCount}`;
       document.getElementById("cache-count").textContent = data.cache_size || "?";
     } catch (err) {
@@ -467,7 +572,11 @@
   }
 
   // ── 启动 ──────────────────────────────────────────────────────────────────
+  loadHistory();
   poll();
+  new ResizeObserver(() => {
+    if (lastHistory) renderHistory(lastHistory);
+  }).observe(document.querySelector('main'));
 </script>
 
 </body>

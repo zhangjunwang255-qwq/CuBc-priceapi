@@ -7,8 +7,12 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Mapping, Sequence
 
-from .ratio_history import build_ratio_series, trading_day_for
-from .config import SHANGHAI_TZ
+try:
+    from .ratio_history import build_ratio_series, trading_day_for
+    from .config import SHANGHAI_TZ
+except ImportError:  # pragma: no cover - direct ``uvicorn main:app`` execution
+    from ratio_history import build_ratio_series, trading_day_for
+    from config import SHANGHAI_TZ
 
 
 class RatioHistoryStore:
@@ -75,10 +79,11 @@ class RatioHistoryStore:
             "message": message,
         })
 
-    def set_unavailable(self, message: str) -> None:
+    def set_unavailable(self, message: str, contracts: dict | None = None) -> None:
         with self._lock:
             payload = {
                 **self._payload,
+                "contracts": contracts if contracts is not None else self._payload["contracts"],
                 "m_plus_1": [],
                 "m_plus_2": [],
                 "status": "unavailable",

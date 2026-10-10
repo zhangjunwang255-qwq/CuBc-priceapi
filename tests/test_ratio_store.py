@@ -75,6 +75,18 @@ class RatioHistoryStoreTests(unittest.TestCase):
         self.assertEqual([], snapshot["m_plus_2"])
         self.assertEqual(NEW, snapshot["contracts"])
 
+    def test_rollover_clears_old_history_before_new_subscription_succeeds(self):
+        day = date(2026, 8, 17)
+        store = RatioHistoryStore()
+        store.set_history(OLD, [day], bars_for([day]),
+                          datetime(2026, 8, 17, 12, 0, tzinfo=SHANGHAI_TZ))
+        store.set_unavailable("等待新合约的一小时行情", contracts=NEW)
+        snapshot = store.snapshot()
+        self.assertEqual(NEW, snapshot["contracts"])
+        self.assertEqual([], snapshot["m_plus_1"])
+        self.assertEqual([], snapshot["m_plus_2"])
+        self.assertEqual("unavailable", snapshot["status"])
+
     def test_unavailable_history_and_missing_auth_are_explicit(self):
         store = RatioHistoryStore()
         store.set_history(OLD, [date(2026, 8, 17)], {},

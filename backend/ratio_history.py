@@ -6,7 +6,10 @@ import math
 from datetime import date, datetime
 from typing import Mapping, Sequence
 
-from .config import SHANGHAI_TZ
+try:
+    from .config import SHANGHAI_TZ
+except ImportError:  # pragma: no cover - direct ``uvicorn main:app`` execution
+    from config import SHANGHAI_TZ
 
 
 def trading_day_for(ts: datetime, trading_dates: Sequence[date]) -> date | None:

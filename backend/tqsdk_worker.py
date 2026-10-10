@@ -117,6 +117,11 @@ class TqSdkWorker:
             active_contracts = get_contracts()
             active_symbols = flatten_contracts(active_contracts)
             self.store.set_contracts(active_contracts)
+            if (self.ratio_store is not None
+                    and self.ratio_store.snapshot()["contracts"] != active_contracts):
+                self.ratio_store.set_unavailable(
+                    "等待当前合约的一小时行情数据", contracts=active_contracts
+                )
             self.app_state.status = "Connecting"
             self.app_state.error = None
 
